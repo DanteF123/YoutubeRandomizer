@@ -4,6 +4,7 @@ import os
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 import random
+from datetime import datetime, timedelta
 
 # Remove the API_KEY constant and add these instead
 SCOPES = ['https://www.googleapis.com/auth/youtube.force-ssl']
@@ -17,62 +18,83 @@ def get_credentials():
     return credentials
 
 def get_short_videos():
+    global video_ids
     credentials = get_credentials()
     youtube = build('youtube', 'v3', credentials=credentials)
     
-    video_ids = []
     next_page_token = None
-    
-    # Random search terms for variety
-    search_terms = ['', 'a', 'e', 'i', 'o', 'u', 'the', 'be', 'to', 'of', 'and']
-    
-    while len(video_ids) < 200:
-        print(f"Fetching more videos... Currently have {len(video_ids)}")
-        
-        search_request = youtube.search().list(
-            part='id,snippet',
-            maxResults=50,
-            type='video',
-            videoDuration='short',
-            relevanceLanguage='en',
-            eventType='none',
-            q=random.choice(search_terms),  # Random basic search term
-            pageToken=next_page_token
-        )
-        search_response = search_request.execute()
-        
-        next_page_token = search_response.get('nextPageToken')
-        
-        for search_result in search_response.get('items', []):
-            if search_result['id']['kind'] == 'youtube#video':
-                video_id = search_result['id']['videoId']
-                
-                # Get detailed video information
+
+    # Generate random date between 2009 and now
+    start_date = datetime(2009, 1, 1)  # YouTube launch date
+    end_date = datetime.now()
+    time_between_dates = end_date - start_date
+    days_between_dates = time_between_dates.days
+    random_days = random.randrange(days_between_dates)
+    random_date = start_date + timedelta(days=random_days)
+
+    while len(video_ids) < 50:
+        try:
+            search_request = youtube.search().list(
+                part='id',
+                maxResults=3,
+                type='video',
+                videoDuration='short',
+                safeSearch='none',
+                relevanceLanguage='en',
+                eventType='none',
+                order='date',
+                publishedBefore=random_date.strftime('%Y-%m-%dT%H:%M:%SZ'),
+                pageToken=next_page_token
+            )
+            search_response = search_request.execute()
+            
+            # Get all video IDs from search
+            batch_video_ids = [item['id']['videoId'] for item in search_response.get('items', [])]
+            
+            # Get video details including category and channel info
+            if batch_video_ids:
                 video_request = youtube.videos().list(
-                    part='contentDetails,snippet',
-                    id=video_id
+                    part='snippet,status,contentDetails',
+                    id=','.join(batch_video_ids)
                 )
                 video_response = video_request.execute()
-                video_info = video_response['items'][0]
                 
-                duration = video_info['contentDetails']['duration']
-                minutes = duration.count('M')
+                # Filter videos
+                for video in video_response.get('items', []):
+                    category_id = video['snippet']['categoryId']
+                    # Exclude:
+                    # - Music (10)
+                    # - Shows (43)
+                    # - Movies (30)
+                    # - Trailers (44)
+                    # - Entertainment (24) - often contains TV clips
+                    if (category_id not in ['10', '43', '30', '44', '24'] and
+                        video['snippet'].get('liveBroadcastContent', 'none') == 'none' and
+                        not video.get('contentDetails', {}).get('licensedContent', False)):  # Exclude licensed content
+                        
+                        # Get channel details to verify it's not a verified/official channel
+                        channel_request = youtube.channels().list(
+                            part='status',
+                            id=video['snippet']['channelId']
+                        )
+                        channel_response = channel_request.execute()
+                        
+                        # Check if channel is not verified/official
+                        if channel_response.get('items'):
+                            channel = channel_response['items'][0]
+                            if not channel.get('status', {}).get('isLinked', False):  # Not a linked/official account
+                                video_ids.append(video['id'])
+            
+            next_page_token = search_response.get('nextPageToken')
+            if not next_page_token:
+                break
                 
-                if (minutes == 0 or minutes <= 2) and \
-                   not video_info['snippet'].get('liveBroadcastContent') == 'live':
-                    video_ids.append(video_id)
-
-                if len(video_ids) >= 200:
-                    break
-        
-        if not next_page_token:
-            # If we run out of results, try with a different random search
-            next_page_token = None
-            continue
+        except Exception as e:
+            print(f"Error fetching videos: {str(e)}")
+            break
     
-    # Shuffle the final list for extra randomness
+    # Shuffle the final list
     shuffle(video_ids)
-    print(f"Final video count: {len(video_ids)}")
     return video_ids
 
 def create_playlist(video_ids):
@@ -86,7 +108,7 @@ def create_playlist(video_ids):
         body={
             'snippet': {
                 'title': 'Short Videos Playlist',
-                'description': 'A playlist of videos under 1 minute'
+                'description': 'A playlist of random short videos'
             },
             'status': {
                 'privacyStatus': 'private'
@@ -134,6 +156,8 @@ def delete_existing_playlist():
 
 def main():
     try:
+        video_ids = []
+
         print("Starting YouTube playlist creation...")
         
         # Delete existing playlist if it exists
@@ -142,7 +166,8 @@ def main():
         
         # Get 50 short videos
         print("Fetching short videos...")
-        video_ids = get_short_videos()
+        while len(video_ids) < 50:
+            get_short_videos()
         
         print(f"Found {len(video_ids)} videos")
         # Shuffle the videos for variety
