@@ -10,6 +10,20 @@ from datetime import datetime, timedelta
 SCOPES = ['https://www.googleapis.com/auth/youtube.force-ssl']
 CLIENT_SECRETS_FILE = "client_secrets.json"  # Path to your OAuth2 client configuration file
 
+video_ids = set()
+
+def get_random_datetime():
+    start_date = datetime(2009, 1, 1)
+    end_date = datetime.now()
+    random_days = random.randint(0, (end_date - start_date).days)
+    random_time = timedelta(
+        hours=random.randint(0, 23),
+        minutes=random.randint(0, 59),
+        seconds=random.randint(0, 59)
+    )
+    random_date = start_date + timedelta(days=random_days) + random_time
+    return random_date.strftime('%Y-%m-%dT%H:%M:%SZ')
+
 def get_credentials():
     print("Please authenticate in the browser window that will open...")
     flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRETS_FILE, SCOPES)
@@ -19,6 +33,7 @@ def get_credentials():
 
 def get_short_videos():
     global video_ids
+
     credentials = get_credentials()
     youtube = build('youtube', 'v3', credentials=credentials)
     
@@ -43,7 +58,7 @@ def get_short_videos():
                 relevanceLanguage='en',
                 eventType='none',
                 order='date',
-                publishedBefore=random_date.strftime('%Y-%m-%dT%H:%M:%SZ'),
+                publishedBefore=get_random_datetime(),
                 pageToken=next_page_token
             )
             search_response = search_request.execute()
@@ -83,7 +98,7 @@ def get_short_videos():
                         if channel_response.get('items'):
                             channel = channel_response['items'][0]
                             if not channel.get('status', {}).get('isLinked', False):  # Not a linked/official account
-                                video_ids.append(video['id'])
+                                video_ids.add(video['id'])
             
             next_page_token = search_response.get('nextPageToken')
             if not next_page_token:
@@ -154,10 +169,11 @@ def delete_existing_playlist():
             print("Deleted existing playlist")
             break
 
+
+
 def main():
     try:
-        video_ids = []
-
+        global video_ids
         print("Starting YouTube playlist creation...")
         
         # Delete existing playlist if it exists
@@ -169,6 +185,7 @@ def main():
         while len(video_ids) < 50:
             get_short_videos()
         
+        video_ids = list(video_ids)
         print(f"Found {len(video_ids)} videos")
         # Shuffle the videos for variety
         shuffle(video_ids)
